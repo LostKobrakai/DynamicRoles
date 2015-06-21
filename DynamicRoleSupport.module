@@ -84,6 +84,7 @@ class DynamicRoleSupport extends WireData implements Module, ConfigurableModule 
 		}
 
 		$this->pages->addHookAfter('saved', $this, 'hookPagesSaved'); 
+		$this->pages->addHookAfter('added', $this, 'hookPagesAdded');
 		$this->pages->addHookAfter('deleted', $this, 'hookPagesDeleted'); 
 
 	}
@@ -467,6 +468,17 @@ class DynamicRoleSupport extends WireData implements Module, ConfigurableModule 
 		} else if(count($changes)) {
 			$this->rebuildForPage($page); 
 		}
+
+	}
+
+	/**
+	 * Hook to Pages::added
+ 	 *
+	 */
+	public function hookPagesAdded($event) {
+
+		$page = $event->arguments(0); 
+		$this->rebuildForPage($page); 
 
 	}
 
