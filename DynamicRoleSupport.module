@@ -537,8 +537,7 @@ class DynamicRoleSupport extends WireData implements Module, ConfigurableModule 
 			$viewable = $guestViewable; 
 
 			if(!$viewable) foreach($this->getPageValue($drole, self::fieldNameView) as $selectorString) {
-				$p = $this->wire('pages')->get("$selectorString, id=$page->id"); 
-				if($p->id == $page->id) {
+				if($this->wire('pages')->count("id=$page->id, $selectorString") == 1) {
 					$viewable = true; 
 					$this->message("Viewable to dynamic role: $drole->name", Notice::debug); 
 					break;
@@ -548,8 +547,7 @@ class DynamicRoleSupport extends WireData implements Module, ConfigurableModule 
 			if($drole->hasEditPermission()) {
 
 				foreach($this->getPageValue($drole, self::fieldNameEdit) as $selectorString) {
-					$p = $this->wire('pages')->get("id=$page->id, $selectorString"); 
-					if($p->id == $page->id) {
+					if($this->wire('pages')->count("id=$page->id, $selectorString") == 1) {
 						$editable = true;
 						$this->message("Editable to dynamic role: $drole->name", Notice::debug); 
 						break;
@@ -561,8 +559,7 @@ class DynamicRoleSupport extends WireData implements Module, ConfigurableModule 
 				}
 
 				foreach($this->getPageValue($drole, self::fieldNameAdd) as $selectorString) {
-					$p = $this->wire('pages')->get("id=$page->id, $selectorString"); 
-					if($p->id == $page->id) {
+					if($this->wire('pages')->count("id=$page->id, $selectorString") == 1) {
 						$addable = true;
 						$this->message("Addable to dynamic role: $drole->name", Notice::debug); 
 						break;
