@@ -105,6 +105,9 @@ class DynamicRoleSupport extends WireData implements Module, ConfigurableModule 
 		$droleTime = (int) $session->droleTime; 
 		$needsRefresh = false;
 
+		// convert the group IDs to 'droles' PageArray as a property of the user
+		$droles = new PageArray();
+
 		// determine if any dynamic roles have been modified since the definitions were stored in the cache
 		foreach($this->wire('droles') as $drole) {
 			if($drole->modified > $droleTime) $needsRefresh = true; 
@@ -129,8 +132,15 @@ class DynamicRoleSupport extends WireData implements Module, ConfigurableModule 
 				// does it match?	
 				if($u->id && $u->id == $user->id) { 
 					// if yes, we've found a group that this user belongs in
-					$droleIDs[] = $drole->id; 
-					$this->message("Dynamic Role: $drole->name", Notice::debug); 
+					$keys = $drole->getKeysFor($user);
+
+					$droleIDs[$drole->id] = $keys; 
+					$drole->keys = $keys;
+
+					$keys = $keys ? implode(', ', $keys) : 'false';
+					$this->message("Dynamic Role: $drole->name => $keys", Notice::debug); 
+
+					$droles->add($drole);
 				} else {
 					// if no, then user does not belong in this group, move onto the next...
 					// $this->message("Dynamic Role does not match: $selector", Notice::debug); 
@@ -144,13 +154,13 @@ class DynamicRoleSupport extends WireData implements Module, ConfigurableModule 
 
 		} else {
 			// we already have the group IDs in the session
-			$droleIDs = $session->droleIDs; 
-		}
+			$droleIDs = $session->droleIDs;
 
-		// convert the group IDs to 'droles' PageArray as a property of the user
-		$droles = new PageArray();
-		foreach($this->wire('droles') as $drole) {
-			if(in_array($drole->id, $droleIDs)) $droles->add($drole);
+			foreach($this->wire('droles') as $drole) {
+				if(!isset($droleIDs[$drole->id])) continue;
+				$drole->keys = $droleIDs[$drole->id];
+				$droles->add($drole);
+			}
 		}
 
 		$user->set(self::fieldName, $droles); 
@@ -174,19 +184,54 @@ class DynamicRoleSupport extends WireData implements Module, ConfigurableModule 
 		$idsEdit = array();
 
 		foreach($this->wire('user')->get(self::fieldName) as $drole) {
-			$ids[] = (int) $drole->id; 
-			if($drole->hasEditPermission()) $idsEdit[] = (int) $drole->id; 
+			$ids[(int) $drole->id] = $drole->keys; 
+			if($drole->hasEditPermission()) $idsEdit[(int) $drole->id] = $drole->keys; 
 		}
 
-		$query->select("$tableView.drole_id AS " . self::viewableKey); 
-		$query->leftjoin("$tableView ON $tableView.pages_id=pages.id AND $tableView.drole_id IN(" . implode(',', $ids) . ")"); 
+		$query->select("$tableView.drole_id AS " . self::viewableKey);
+		$this->message($this->buildJoin($tableView, $ids));
+		$query->leftjoin($this->buildJoin($tableView, $ids)); 
 
 		if(count($idsEdit)) {
 			$query->select("$tableEdit.drole_id AS " . self::editableKey); 
 			$query->select("$tableAdd.drole_id AS " . self::addableKey); 
-			$query->leftjoin("$tableEdit ON $tableEdit.pages_id=pages.id AND $tableEdit.drole_id IN(" . implode(',', $idsEdit) . ")"); 
-			$query->leftjoin("$tableAdd ON $tableAdd.pages_id=pages.id AND $tableAdd.drole_id IN(" . implode(',', $idsEdit) . ")"); 
+			$query->leftjoin($this->buildJoin($tableEdit, $idsEdit)); 
+			$query->leftjoin($this->buildJoin($tableAdd, $idsEdit)); 
 		}
+	}
+
+	private function buildJoin($table, $ids) {
+		$keyed = array_filter($ids, function($item) { return is_array($item); });
+		$unkeyed = array_filter($ids, function($item) { return $item === false; });
+
+		if(count($keyed)) {
+			$ids = implode(',', array_keys($keyed));
+			$keywords = '"' . implode('","', array_unique(call_user_func_array('array_merge', $keyed))) . '"';
+			$keyed = "($table.drole_id IN($ids) AND $table.keyword IN($keywords))";
+		} else {
+			$keyed = '';
+		}
+
+		if(count($unkeyed)) {
+			$ids = implode(',', array_keys($unkeyed));
+			$unkeyed = "($table.drole_id IN($ids) AND $table.keyword = \"\")";
+		} else {
+			$unkeyed = '';
+		}
+
+		if($keyed && $unkeyed) {
+			return "$table ON $table.pages_id=pages.id AND ($keyed OR $unkeyed)";
+		}
+		
+		if($keyed) {
+			return "$table ON $table.pages_id=pages.id AND $keyed";
+		}
+		
+		if($unkeyed) {
+			return "$table ON $table.pages_id=pages.id AND $unkeyed";
+		}
+
+		return "$table ON $table.pages_id=pages.id";
 	}
 
 	/**
@@ -575,11 +620,18 @@ class DynamicRoleSupport extends WireData implements Module, ConfigurableModule 
 
 			foreach(array($tableView => $viewable, $tableEdit => $editable, $tableAdd => $addable) as $t => $allow) {
 				if(!$allow) continue; 
-				$sql = "INSERT INTO $t (pages_id, drole_id) VALUES(:pages_id, :drole_id)";
-				$query = $this->wire('database')->prepare($sql); 
-				$query->bindValue(':pages_id', $page->id); 
-				$query->bindValue(':drole_id', $drole->id); 
-				$query->execute();
+				$keywords = $drole->getKeysFrom($page);
+
+				if($keywords === false) $keywords = [''];
+
+				foreach ($keywords as $keyword){
+					$sql = "INSERT INTO $t (pages_id, drole_id, keyword) VALUES(:pages_id, :drole_id, :keyword)";
+					$query = $this->wire('database')->prepare($sql); 
+					$query->bindValue(':pages_id', $page->id); 
+					$query->bindValue(':drole_id', $drole->id); 
+					$query->bindValue(':keyword', $keyword); 
+					$query->execute();
+				}
 			}
 
 		}
@@ -595,13 +647,17 @@ class DynamicRoleSupport extends WireData implements Module, ConfigurableModule 
 
 		// prevent DB from logging queries, as there may be a LOT
 		$this->wire('database')->setDebugMode(false); 
-		$pageFinderOptions = array('returnVerbose' => false, 'getTotal' => false);		
 
 		$fieldsTables = array(
 			self::fieldNameView => self::tableNameView,
 			self::fieldNameEdit => self::tableNameEdit, 
 			self::fieldNameAdd => self::tableNameAdd
 			);
+
+		if($this->wire('hooks')->isHooked('DynamicRole::getKeysFrom'))
+			return $this->rebuildTableDataTheHardWay($drole, $fieldsTables);
+
+		$pageFinderOptions = array('returnVerbose' => false, 'getTotal' => false);		
 
 		// delete existing entries
 		foreach($fieldsTables as $fieldName => $tableName) {
@@ -633,6 +689,24 @@ class DynamicRoleSupport extends WireData implements Module, ConfigurableModule 
 				}
 
 				$this->message("Added " . count($ids) . " to '$tableName' for '$drole->name' in " . Debug::timer($timer) . " seconds", Notice::debug); 
+			}
+		}
+	}
+
+	protected function rebuildTableDataTheHardWay(Page $drole, $fieldsTables) {
+		foreach($fieldsTables as $fieldName => $tableName) {
+			if($fieldName != self::fieldNameView && !$drole->hasEditPermission()) continue;
+
+			foreach($this->getPageValue($drole, $fieldName) as $selectorString) {
+				$id = 0;
+				while (true) {
+					$p = $this->pages->get("{$selectorString}, id>$id");
+					if(!$id = $p->id) break;
+
+					$this->rebuildForPage($p);
+
+					$this->pages->uncacheAll($p);
+				}
 			}
 		}
 	}
@@ -802,8 +876,10 @@ class DynamicRoleSupport extends WireData implements Module, ConfigurableModule 
 				CREATE TABLE $t (
 				pages_id INT UNSIGNED NOT NULL, 
 				drole_id INT UNSIGNED NOT NULL,
-				PRIMARY KEY(pages_id, drole_id), 
-				KEY drole_id (drole_id)
+				keyword VARCHAR(200),
+				PRIMARY KEY(pages_id, drole_id, keyword(200)), 
+				KEY drole_id (drole_id),
+				KEY keyword (keyword(200))
 				)");
 			$this->message("Created table: $t"); 
 		}
@@ -865,6 +941,20 @@ class DynamicRoleSupport extends WireData implements Module, ConfigurableModule 
 		}
 
 		$this->wire(self::apiVarName, null); 
+	}
+
+	/**
+	 * Add key column
+	 *
+	 */
+	public function ___upgrade($fromVersion, $toVersion) {
+		if($fromVersion <= 7 && $toVersion > 7) {
+			foreach(array(self::tableNameView, self::tableNameEdit, self::tableNameAdd) as $t) {
+				$this->wire('database')->exec("ALTER TABLE $t ADD keyword VARCHAR(200);");
+				$this->wire('database')->exec("ALTER TABLE $t ADD INDEX keyword (keyword(200));");
+				$this->wire('database')->exec("ALTER TABLE $t DROP PRIMARY KEY, ADD PRIMARY KEY (pages_id, drole_id, keyword(200));");
+			}
+		}
 	}
 
 	public static function getModuleConfigInputfields(array $data) {

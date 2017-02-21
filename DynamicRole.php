@@ -36,5 +36,13 @@ class DynamicRole extends Role {
 		return $this->hasEditPermission;
 	}
 
+	public function ___getKeysFor(User $user) {
+		return $this->keys = false;
+	}
+
+	public function ___getKeysFrom(Page $page) {
+		return false;
+	}
+
 }
 
